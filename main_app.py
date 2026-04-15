@@ -7,65 +7,88 @@ from streamlit_folium import st_folium
 st.set_page_config(page_title="Ecobici Mexico City App", layout="wide")
 
 # -----------------------------------
-# Load data from GBFS (LIVE DATA)
+# Load data from GBFS safely
 # -----------------------------------
-url = 'https://gbfs.mex.lyftbikes.com/gbfs/gbfs.json'
-website_data = requests.get(url).json()
+gbfs_url = "https://gbfs.mex.lyftbikes.com/gbfs/gbfs.json"
 
-urls = website_data['data']['en']['feeds']
-url_data = [u['url'] for u in urls if 'station' in u['url']]
+website_data = requests.get(gbfs_url).json()
 
-# Station info
-data1 = requests.get(url_data[0]).json()
-df1 = pd.DataFrame(data1['data']['stations'])
-df1 = df1[['station_id', 'lat', 'lon', 'capacity']]
+feeds = website_data["data"]["en"]["feeds"]
+
+station_info_url = next(
+    feed["url"] for feed in feeds if feed["name"] == "station_information"
+)
+station_status_url = next(
+    feed["url"] for feed in feeds if feed["name"] == "station_status"
+)
+
+# Station information
+data1 = requests.get(station_info_url).json()
+df1 = pd.DataFrame(data1["data"]["stations"])
+
+# Keep only columns that actually exist
+needed_info_cols = ["station_id", "lat", "lon", "capacity"]
+missing_info_cols = [col for col in needed_info_cols if col not in df1.columns]
+
+if missing_info_cols:
+    st.error(f"Missing columns in station information feed: {missing_info_cols}")
+    st.stop()
+
+df1 = df1[needed_info_cols]
 
 # Station status
-data2 = requests.get(url_data[1]).json()
-df2 = pd.DataFrame(data2['data']['stations'])
-df2 = df2[['station_id',
-           'num_bikes_available',
-           'num_bikes_disabled',
-           'num_docks_available',
-           'num_docks_disabled']]
+data2 = requests.get(station_status_url).json()
+df2 = pd.DataFrame(data2["data"]["stations"])
 
-# Merge both
-df = pd.merge(df1, df2, on='station_id')
-df['station_id'] = df['station_id'].astype(str)
+needed_status_cols = [
+    "station_id",
+    "num_bikes_available",
+    "num_bikes_disabled",
+    "num_docks_available",
+    "num_docks_disabled",
+]
+missing_status_cols = [col for col in needed_status_cols if col not in df2.columns]
+
+if missing_status_cols:
+    st.error(f"Missing columns in station status feed: {missing_status_cols}")
+    st.stop()
+
+df2 = df2[needed_status_cols]
+
+# Merge
+df = pd.merge(df1, df2, on="station_id")
+df["station_id"] = df["station_id"].astype(str)
 
 # -----------------------------------
 # Map function
 # -----------------------------------
 def bike_share_system_cdmx_plot(station_number):
-    m = folium.Map([df['lat'].mean(), df['lon'].mean()],
-                   zoom_start=12)
+    m = folium.Map(
+        [df["lat"].mean(), df["lon"].mean()],
+        zoom_start=12
+    )
 
     for n in range(len(df)):
         folium.Marker(
-            location=[df['lat'].iloc[n], df['lon'].iloc[n]],
-            tooltip=df['station_id'].iloc[n],
+            location=[df["lat"].iloc[n], df["lon"].iloc[n]],
+            tooltip=df["station_id"].iloc[n],
             icon=folium.Icon(color="red"),
         ).add_to(m)
 
-    station_to_highlight = df[df['station_id'] == str(station_number)]
+    station_to_highlight = df[df["station_id"] == str(station_number)]
 
-    try:
-        if not station_to_highlight.empty:
-            station_lat = station_to_highlight['lat'].iloc[0]
-            station_lon = station_to_highlight['lon'].iloc[0]
-            highlight_id = station_to_highlight['station_id'].iloc[0]
+    if not station_to_highlight.empty:
+        station_lat = station_to_highlight["lat"].iloc[0]
+        station_lon = station_to_highlight["lon"].iloc[0]
+        highlight_id = station_to_highlight["station_id"].iloc[0]
 
-            folium.Marker(
-                location=[station_lat, station_lon],
-                tooltip=highlight_id,
-                icon=folium.Icon(icon="cloud"),
-            ).add_to(m)
-        else:
-            raise ValueError(f"Station with ID {station_number} not found.")
-    except ValueError as e:
-        st.error(e)
-    except Exception as e:
-        st.error(f"Unexpected error: {e}")
+        folium.Marker(
+            location=[station_lat, station_lon],
+            tooltip=highlight_id,
+            icon=folium.Icon(icon="cloud"),
+        ).add_to(m)
+    else:
+        st.error(f"Station with ID {station_number} not found.")
 
     return m
 
@@ -82,7 +105,7 @@ col1, col2 = st.columns([1, 3])
 
 with col1:
     st.subheader("Select Station")
-    station_options = sorted(df['station_id'].unique())
+    station_options = sorted(df["station_id"].unique())
     selected_station = st.selectbox("Choose a station ID", station_options)
 
 with col2:
